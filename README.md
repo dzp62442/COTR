@@ -44,9 +44,12 @@ python tools/create_data_bevdet.py
 step 3. For Occupancy Prediction task, download (only) the 'gts' from [CVPR2023-3D-Occupancy-Prediction](https://github.com/CVPR2023-3D-Occupancy-Prediction/CVPR2023-3D-Occupancy-Prediction) and arrange the folder as:
 ```shell script
 └── nuscenes
+    ├── maps  (existing)
     ├── v1.0-trainval (existing)
     ├── sweeps  (existing)
     ├── samples (existing)
+    ├── lidarseg (existing)
+    ├── panoptic (existing)
     └── gts (new)
 ```
 

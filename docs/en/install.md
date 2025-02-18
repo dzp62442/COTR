@@ -8,13 +8,13 @@ conda activate cotr
 **2. Install Pytorch following the [official instructions](https://pytorch.org/).**
 
 ```shell
-conda install pytorch==1.10.0 torchvision==0.11.0 cudatoolkit=11.3
+pip install torch==1.10.0+cu111 torchvision==0.11.0+cu111 torchaudio==0.10.0 -f https://download.pytorch.org/whl/torch_stable.html
 ```
 
 
 **3. Install mmcv-full.**
 ```shell
-pip install mmcv-full==1.5.3 -f https://download.openmmlab.com/mmcv/dist/cu113/torch1.10.0/index.html
+pip install mmcv-full==1.5.3 -f https://download.openmmlab.com/mmcv/dist/cu111/torch1.10.0/index.html
 ```
 
 **4. Install mmdet & mmsegmentation.**
@@ -24,7 +24,7 @@ pip install mmdet==2.25.1 mmsegmentation==0.25.0
 
 **5. Install other requirements.**
 ```shell
-pip install lyft_dataset_sdk networkx==2.2 numba==0.53.0 numpy nuscenes-devkit plyfile scikit-image tensorboard trimesh==2.35.39
+pip install lyft_dataset_sdk networkx==2.2 numba==0.53.0 numpy==1.23.4 nuscenes-devkit plyfile scikit-image tensorboard trimesh==2.35.39 setuptools==60.1.0
 ```
 
 **5. Prepare cotr repo by.**
