@@ -19,12 +19,12 @@ pip install mmcv-full==1.5.3 -f https://download.openmmlab.com/mmcv/dist/cu111/t
 
 **4. Install mmdet & mmsegmentation.**
 ```shell
-pip install mmdet==2.25.1 mmsegmentation==0.25.0
+pip install scikit-image==0.19.3 mmdet==2.25.1 mmsegmentation==0.25.0
 ```
 
 **5. Install other requirements.**
 ```shell
-pip install lyft_dataset_sdk networkx==2.2 numba==0.53.0 numpy==1.23.4 nuscenes-devkit plyfile scikit-image tensorboard trimesh==2.35.39 setuptools==60.1.0
+pip install lyft_dataset_sdk networkx==2.2 numba==0.53.0 numpy==1.23.4 nuscenes-devkit plyfile setproctitle tensorboard trimesh==2.35.39 einops yapf==0.40.1 setuptools==59.5.0
 ```
 
 **5. Prepare cotr repo by.**

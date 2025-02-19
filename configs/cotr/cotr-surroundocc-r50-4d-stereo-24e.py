@@ -341,7 +341,7 @@ test_data_config = dict(
     ann_file=data_root + 'bevdetv2-nuscenes_infos_val.pkl')
 
 data = dict(
-    samples_per_gpu=2,
+    samples_per_gpu=1,  # batch_size
     workers_per_gpu=4,
     train=dict(
         data_root=data_root,

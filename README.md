@@ -56,9 +56,9 @@ step 3. For Occupancy Prediction task, download (only) the 'gts' from [CVPR2023-
 #### Train model
 ```shell
 # single gpu
-python tools/train_occ.py $config
+CUDA_VISIBLE_DEVICES=0 python tools/train_occ.py $config
 # multiple gpu
-./tools/dist_train_occ.sh $config num_gpu
+CUDA_VISIBLE_DEVICES=0,1 ./tools/dist_train_occ.sh $config num_gpu
 ```
 
 #### Test model
