@@ -2,6 +2,7 @@
 import argparse
 import os
 import warnings
+import setproctitle
 
 import mmcv
 import torch
@@ -264,4 +265,5 @@ def main():
 
 
 if __name__ == '__main__':
+    setproctitle.setproctitle("dzp_test")
     main()

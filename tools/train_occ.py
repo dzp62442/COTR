@@ -6,6 +6,7 @@ import os
 import time
 import warnings
 from os import path as osp
+import setproctitle
 
 import mmcv
 import torch
@@ -21,8 +22,6 @@ from mmdet3d.models import build_model
 from mmdet3d.utils import collect_env, get_root_logger
 from mmdet.apis import set_random_seed
 from mmseg import __version__ as mmseg_version
-
-import setproctitle
 
 try:
     # If mmdet version > 2.20.0, setup_multi_processes would be imported and
@@ -137,6 +136,8 @@ def main():
         # use config filename as default work_dir if cfg.work_dir is None
         cfg.work_dir = osp.join('./work_dirs',
                                 osp.splitext(osp.basename(args.config))[0])
+    
+    # resume training
     if args.resume_from is not None:
         cfg.resume_from = args.resume_from
 
@@ -147,6 +148,7 @@ def main():
                       'mmsegmentation verision >= 0.21.0 for 3D'
                       'segmentation model')
 
+    # 现在代码仅支持单GPU训练，因此如果有多个GPU被指定了，只使用第一个
     if args.gpus is not None:
         cfg.gpu_ids = range(1)
         warnings.warn('`--gpus` is deprecated because we only support '
@@ -161,6 +163,7 @@ def main():
     if args.gpus is None and args.gpu_ids is None:
         cfg.gpu_ids = [args.gpu_id]
 
+    # 自动缩放学习率
     if args.autoscale_lr:
         # apply the linear scaling rule (https://arxiv.org/abs/1706.02677)
         cfg.optimizer['lr'] = cfg.optimizer['lr'] * len(cfg.gpu_ids) / 8
@@ -192,6 +195,7 @@ def main():
     logger = get_root_logger(
         log_file=log_file, log_level=cfg.log_level, name=logger_name)
 
+    # 记录环境信息
     # init the meta dict to record some important information such as
     # environment info and seed, which will be logged
     meta = dict()
@@ -238,6 +242,7 @@ def main():
         # refer to https://mmdetection3d.readthedocs.io/en/latest/tutorials/customize_runtime.html#customize-workflow  # noqa
         val_dataset.test_mode = False
         datasets.append(build_dataset(val_dataset))
+    
     if cfg.checkpoint_config is not None:
         # save mmdet version, config file content and class names in
         # checkpoints as meta data
@@ -249,8 +254,10 @@ def main():
             CLASSES=datasets[0].CLASSES,
             PALETTE=datasets[0].PALETTE  # for segmentors
             if hasattr(datasets[0], 'PALETTE') else None)
+    
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
+
     train_occ_model(
         model,
         datasets,
@@ -262,5 +269,5 @@ def main():
 
 
 if __name__ == '__main__':
-    setproctitle.setproctitle("dzp")
+    setproctitle.setproctitle("dzp_train")
     main()

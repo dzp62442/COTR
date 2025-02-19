@@ -54,32 +54,59 @@ step 3. For Occupancy Prediction task, download (only) the 'gts' from [CVPR2023-
 ```
 
 #### Train model
+- single gpu（多卡分布式训练设置存在问题，报错 DDP 初始化异常）
 ```shell
-# single gpu
 CUDA_VISIBLE_DEVICES=0 python tools/train_occ.py $config
-# multiple gpu
-CUDA_VISIBLE_DEVICES=0,1 ./tools/dist_train_occ.sh $config num_gpu
+```
+- multiple gpu
+```shell
+CUDA_VISIBLE_DEVICES=0,1 ./tools/dist_train_occ.sh $config $num_gpu
+# For example
+CUDA_VISIBLE_DEVICES=2,3 ./tools/dist_train_occ.sh configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py 2
 ```
 
 #### Test model
+- single gpu
 ```shell
-# single gpu
-python tools/test_occ.py $config $checkpoint --eval mIoU
-# multiple gpu
-./tools/dist_test_occ.sh $config $checkpoint num_gpu --eval mIoU
+CUDA_VISIBLE_DEVICES=0 python tools/test_occ.py $config $checkpoint --eval mIoU
+```
+- multiple gpu
+```shell
+CUDA_VISIBLE_DEVICES=0,1 ./tools/dist_test_occ.sh $config $checkpoint $num_gpu --eval mIoU
+# For example
+CUDA_VISIBLE_DEVICES=1 ./tools/dist_test_occ.sh configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/epoch_1_ema.pth 1 --eval mIoU
 ```
 
 #### Train & Test model
 ```shell
 # multiple gpu
-./train_eval_occ.sh $config num_gpu
+./train_eval_occ.sh $config $num_gpu
 ```
 
 #### Visualize the predicted result.
 
+- 依赖库
 ```shell
-python tools/dist_test.sh $config $checkpoint --out $savepath
-python tools/analysis_tools/vis_frame.py $savepath $config --save-path $scenedir --scene-idx $sceneidx --vis-gt
+pip install vtk==9.4.0 configobj
+pip install mayavi==4.8.2 PyQt5  # 3090 服务器没有安装 Qt 系统库，无法运行
+```
+
+- 输出 pkl 格式的结果文件
+```shell
+CUDA_VISIBLE_DEVICES=0 ./tools/dist_test.sh $config $checkpoint $num_gpu --out $pklpath
+# For example
+CUDA_VISIBLE_DEVICES=1 ./tools/dist_test.sh configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/epoch_1_ema.pth 1 --out work_dirs/cotr-surroundocc-r50-4d-stereo-24e/vis/epoch_1_ema_results.pkl
+```
+
+- 可视化保存为图像
+```shell
+python tools/analysis_tools/vis_frame.py $pklpath $config --save-path $scenedir --scene-idx $sceneidx --vis-gt
+# For example
+python tools/analysis_tools/vis_frame.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/vis/epoch_1_ema_results.pkl configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py --save-path work_dirs/cotr-surroundocc-r50-4d-stereo-24e/vis --scene-idx 3 --vis-gt
+```
+
+- 可视化创建 gif
+```shell
 python tools/analysis_tools/generate_gifs.py --scene-dir $scenedir
 ```
 

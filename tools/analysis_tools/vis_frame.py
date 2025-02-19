@@ -288,7 +288,8 @@ if __name__ == "__main__":
 
     cfg = compat_cfg(cfg)
     dataset = build_dataset(cfg.data.test)
-    nusc = NuScenes(version='v1.0-trainval', dataroot='/data2/mqh/code/BEVDet/data/nuscenes',
+    nusc = NuScenes(version='v1.0-trainval', 
+                    dataroot=os.path.join(os.path.dirname(__file__), '../../data/nuscenes'),
                     verbose=True)
 
     res = mmcv.load(args.load_path)
