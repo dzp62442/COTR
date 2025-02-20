@@ -122,7 +122,7 @@ def show_point_cloud(points: np.ndarray, colors=True, points_colors=None, bbox3d
     """
     :param points: (N, 3)  3:(x, y, z)
     :param colors: false 不显示点云颜色
-    :param points_colors: (N, 4）
+    :param points_colors: (N, 4)
     :param bbox3d: voxel grid (N, 7) 7: (center, wlh, yaw=0)
     :param voxelize: false 不显示voxel边界
     :param bbox_corners: (N, 8, 3)  voxel grid 角点坐标, 用于绘制voxel grid 边界.
@@ -139,8 +139,7 @@ def show_point_cloud(points: np.ndarray, colors=True, points_colors=None, bbox3d
     pcd.points = o3d.utility.Vector3dVector(points+offset)
     if colors:
         pcd.colors = o3d.utility.Vector3dVector(points_colors[:, :3])
-    mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
-        size=1, origin=[0, 0, 0])
+    mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1, origin=[0, 0, 0])  # 自车直角坐标系
 
     voxelGrid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=voxel_size)
     if large_voxel:
@@ -157,6 +156,7 @@ def show_point_cloud(points: np.ndarray, colors=True, points_colors=None, bbox3d
 
     vis.add_geometry(mesh_frame)
 
+    # 绘制自车点云
     # ego_pcd = o3d.geometry.PointCloud()
     # ego_points = generate_the_ego_car()
     # ego_pcd.points = o3d.utility.Vector3dVector(ego_points)
@@ -195,15 +195,15 @@ def show_occ(occ_state, occ_show, voxel_size, vis=None, offset=[0, 0, 0]):
 
     vis = show_point_cloud(
         points=pcd.numpy(),
-        colors=True,
+        colors=True,  # 是否显示体素的颜色，False 为纯黑
         points_colors=pcds_colors,
-        voxelize=True,
+        voxelize=True,  # 是否显示体素的网格线
         bbox3d=bboxes.numpy(),
         bbox_corners=bboxes_corners.numpy(),
         linesets=edges.numpy(),
         vis=vis,
         offset=offset,
-        large_voxel=True,
+        large_voxel=True,  # 是否显示大体素，True 方格体素，False 点云
         voxel_size=0.4
     )
     return vis
@@ -240,7 +240,7 @@ def parse_args():
     parser.add_argument(
         '--vis-frames',
         type=int,
-        default=500,
+        default=100,
         help='Number of frames for visualization')
     parser.add_argument(
         '--scale-factor',
@@ -283,10 +283,6 @@ def main():
     # load predicted results
     results_dir = args.res
 
-    nusc = NuScenes(version='v1.0-trainval', 
-                    dataroot=args.root_path,
-                    verbose=True)
-
     # load dataset information
     info_path = args.root_path + '/bevdetv2-nuscenes_infos_%s.pkl' % args.version
     dataset = pickle.load(open(info_path, 'rb'))
@@ -313,13 +309,12 @@ def main():
     vis = o3d.visualization.VisualizerWithKeyCallback()
     vis.create_window()
 
-    for cnt, info in enumerate(
-            dataset['infos'][:min(args.vis_frames, len(dataset['infos']))]):
+    # 遍历每个场景信息
+    for cnt, info in enumerate(dataset['infos'][:min(args.vis_frames, len(dataset['infos']))]):
         if cnt % 10 == 0:
             print('%d/%d' % (cnt, min(args.vis_frames, len(dataset['infos']))))
 
-        scene_name = nusc.get('scene', info['scene_token'])['name']
-        # scene_name = info['scene_name']
+        scene_name = info['scene_name']
         sample_token = info['token']
 
         pred_occ_path = os.path.join(results_dir, scene_name, sample_token, 'pred.npz')
@@ -398,8 +393,6 @@ def main():
         if args.format == 'image':
             out_dir = os.path.join(vis_dir, f'{scene_name}', f'{sample_token}')
             mmcv.mkdir_or_exist(out_dir)
-            for i, img in enumerate(imgs):
-                cv2.imwrite(os.path.join(out_dir, f'img{i}.png'), img)
             cv2.imwrite(os.path.join(out_dir, 'occ.png'), occ_canvas)
             cv2.imwrite(os.path.join(out_dir, 'overall.png'), big_img)
         elif args.format == 'video':

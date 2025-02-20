@@ -125,6 +125,7 @@ def add_ann_adj_info(extra_tag):
             dataset['infos'][id]['scene_token'] = sample['scene_token']
 
             scene = nuscenes.get('scene', sample['scene_token'])
+            dataset['infos'][id]['scene_name'] = scene['name']
             dataset['infos'][id]['occ_path'] = \
                 './data/nuscenes/gts/%s/%s'%(scene['name'], info['token'])
         with open('./data/nuscenes/%s_infos_%s.pkl' % (extra_tag, set),
