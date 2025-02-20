@@ -84,11 +84,21 @@ class NuScenesDatasetOccpancy(NuScenesDataset):
 
             self.occ_eval_metrics.add_batch(occ_pred, gt_semantics, mask_lidar, mask_camera)
 
-            if index%100==0 and show_dir is not None:
-                gt_vis = self.vis_occ(gt_semantics)
-                pred_vis = self.vis_occ(occ_pred)
-                mmcv.imwrite(np.concatenate([gt_vis, pred_vis], axis=1),
-                             os.path.join(show_dir + "%d.jpg"%index))
+            # if index%100==0 and show_dir is not None:
+            #     gt_vis = self.vis_occ(gt_semantics)
+            #     pred_vis = self.vis_occ(occ_pred)
+            #     mmcv.imwrite(np.concatenate([gt_vis, pred_vis], axis=1),
+            #                  os.path.join(show_dir + "%d.jpg"%index))
+
+            if show_dir is not None:
+                mmcv.mkdir_or_exist(show_dir)
+                # scene_name = info['scene_name']
+                scene_name = [tem for tem in info['occ_path'].split('/') if 'scene-' in tem][0]
+                sample_token = info['token']
+                mmcv.mkdir_or_exist(os.path.join(show_dir, scene_name, sample_token))
+                save_path = os.path.join(show_dir, scene_name, sample_token, 'pred.npz')
+                np.savez_compressed(save_path, pred=occ_pred, gt=occ_gt, sample_token=sample_token)
+
         return self.occ_eval_metrics.count_miou()
 
     def vis_occ(self, semantics):

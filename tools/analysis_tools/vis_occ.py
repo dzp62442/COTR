@@ -1,393 +1,421 @@
-# pythonw vis_fru.py
-# from operator import gt
-
+import os
+import setproctitle
 import mmcv
-import pickle
+import open3d as o3d
 import numpy as np
-# from omegaconf import DictConfig
-from mayavi import mlab
-from collections import Counter
-# path = r'n008-2018-08-28-16-16-48-0400__LIDAR_TOP__1535488206297315.pcd.bin'
-# points = np.fromfile(path, dtype=np.float16).reshape(-1, 5)
-# print(points.shape)
+import torch
+import pickle
+import math
+from typing import Tuple, List, Dict, Iterable
 import argparse
-point_cloud_range = [-50, -50, -2, 50, 50, 5]
-voxel_size=[0.2, 0.2, 0.2]
-voxel_shape=(int((point_cloud_range[3]-point_cloud_range[0])/voxel_size[0]),
-             int((point_cloud_range[4]-point_cloud_range[1])/voxel_size[1]),
-             int((point_cloud_range[5]-point_cloud_range[2])/voxel_size[2]))
-map_label = {0: 0,
-                1: 1,
-                2: 1,
-                3: 1,
-                4: 1,
-                5: 1,
-                6: 1,
-                7: 1,
-                8: 1,
-                9: 2,
-                10: 2,
-                11: 2,
-                12: 2,
-                13: 2,
-                14: 3,
-                15: 3,
-                16: 3,
-                17: 3,
-                18: 3,
-                19: 3,
-                20: 3,
-                21: 3,
-                22: 3,
-                23: 3,
-                24: 4,
-                25: 4,
-                26: 4,
-                27: 4,
-                28: 4,
-                29: 4,
-                30: 4,
-                31: 3}
-def remove_far(points, point_cloud_range):
-    mask = (points[:, 0]>point_cloud_range[0]) & (points[:, 0]<point_cloud_range[3]) & (points[:, 1]>point_cloud_range[1]) & (points[:, 1]<point_cloud_range[4]) \
-            & (points[:, 2]>point_cloud_range[2]) & (points[:, 2]<point_cloud_range[5])
-    return points[mask, :]
+import cv2
+from nuscenes.nuscenes import NuScenes
 
-def voxelize(voxel: np.array, label_count: np.array):
-    '''
-    '''
-    for x in range(voxel.shape[0]):
-        for y in range(voxel.shape[1]):
-            for z in range(voxel.shape[2]):
-                if label_count[x, y, z] == 0:
-                    continue
-                labels = voxel[x, y, z]
-                if np.unique(labels).shape[0] == 0:
-                    # import ipdb; ipdb.set_trace()
-                    assert False
-                    continue
-                # import ipdb
-                # ipdb.set_trace()
-                # print(np.argmax(np.bincount(labels[labels!=0])))
-                try:
-                    label_count[x, y, z] = np.argmax(np.bincount(labels[labels!=0]))
-                except:
-                    print(labels)
-    return label_count
+NOT_OBSERVED = -1
+FREE = 0
+OCCUPIED = 1
+FREE_LABEL = 17
+BINARY_OBSERVED = 1
+BINARY_NOT_OBSERVED = 0
 
-def points2voxel(points, voxel_shape, voxel_size, max_points=5, specific_category=None):
-    voxel = np.zeros((*voxel_shape, max_points), dtype=np.int64)
-    label_count = np.zeros((voxel_shape), dtype=np.int64)
-    index = points[:, 4].argsort()
-    points = points[index]
-    for point in points:
-      
-        x, y, z = point[0], point[1], point[2]
-        x = round((x - point_cloud_range[0]) / voxel_size[0])
-        y = round((y - point_cloud_range[1]) / voxel_size[1])
-        z = round((z - point_cloud_range[2]) / voxel_size[2])
-        if point[4] == 31:
-            continue
-        if specific_category and int(point[4]) not in  specific_category:
-            continue
-        try:
-            voxel[x, y, z, label_count[x, y, z]] = int(point[4])  # map_label[int(point[4])]
-            label_count[x, y, z] += 1
-        except:
-            # import ipdb
-            # ipdb.set_trace()
-            continue
+VOXEL_SIZE = [0.4, 0.4, 0.4]
+POINT_CLOUD_RANGE = [-40, -40, -1, 40, 40, 5.4]
+SPTIAL_SHAPE = [200, 200, 16]
+TGT_VOXEL_SIZE = [0.4, 0.4, 0.4]
+TGT_POINT_CLOUD_RANGE = [-40, -40, -1, 40, 40, 5.4]
 
-    voxel = voxelize(voxel, label_count)
-    label_count[label_count==max_points] = 0
-    voxel = voxel.astype(np.float64)
-    # from IPython import embed
-    # embed()
-    # exit()
-    return voxel
+
+colormap_to_colors = np.array(
+    [
+        [0,   0,   0, 255],  # 0 undefined
+        [112, 128, 144, 255],  # 1 barrier  orange
+        [220, 20, 60, 255],    # 2 bicycle  Blue
+        [255, 127, 80, 255],   # 3 bus  Darkslategrey
+        [255, 158, 0, 255],  # 4 car  Crimson
+        [233, 150, 70, 255],   # 5 cons. Veh  Orangered
+        [255, 61, 99, 255],  # 6 motorcycle  Darkorange
+        [0, 0, 230, 255], # 7 pedestrian  Darksalmon
+        [47, 79, 79, 255],  # 8 traffic cone  Red
+        [255, 140, 0, 255],# 9 trailer  Slategrey
+        [255, 99, 71, 255],# 10 truck Burlywood
+        [0, 207, 191, 255],    # 11 drive sur  Green
+        [175, 0, 75, 255],  # 12 other lat  nuTonomy green
+        [75, 0, 75, 255],  # 13 sidewalk
+        [112, 180, 60, 255],    # 14 terrain
+        [222, 184, 135, 255],    # 15 manmade
+        [0, 175, 0, 255],   # 16 vegeyation
+], dtype=np.float32)
 
 
 
-# voxel = points2voxel(points, voxel_shape, voxel_size, 100)
-def get_grid_coords(dims, resolution):
+def voxel2points(voxel, occ_show, voxelSize):
     """
-    :param dims: the dimensions of the grid [x, y, z] (i.e. [256, 256, 32])
-    :return coords_grid: is the center coords of voxels in the grid
+    Args:
+        voxel: (Dx, Dy, Dz)
+        occ_show: (Dx, Dy, Dz)
+        voxelSize: (dx, dy, dz)
+
+    Returns:
+        points: (N, 3) 3: (x, y, z)
+        voxel: (N, ) cls_id
+        occIdx: (x_idx, y_idx, z_idx)
     """
-
-    g_xx = np.arange(0, dims[0] + 1)
-    g_yy = np.arange(0, dims[1] + 1)
-    g_zz = np.arange(0, dims[2] + 1)
-
-    # Obtaining the grid with coords...
-    xx, yy, zz = np.meshgrid(g_xx[:-1], g_yy[:-1], g_zz[:-1])
-    coords_grid = np.array([xx.flatten(), yy.flatten(), zz.flatten()]).T
-    coords_grid = coords_grid.astype(np.float32)
-
-    coords_grid = (coords_grid * resolution) + resolution / 2
-
-    temp = np.copy(coords_grid)
-    temp[:, 0] = coords_grid[:, 1]
-    temp[:, 1] = coords_grid[:, 0]
-    coords_grid = np.copy(temp)
-
-    return coords_grid
+    occIdx = torch.where(occ_show)
+    points = torch.cat((occIdx[0][:, None] * voxelSize[0] + POINT_CLOUD_RANGE[0], \
+                        occIdx[1][:, None] * voxelSize[1] + POINT_CLOUD_RANGE[1], \
+                        occIdx[2][:, None] * voxelSize[2] + POINT_CLOUD_RANGE[2]),
+                       dim=1)      # (N, 3) 3: (x, y, z)
+    return points, voxel[occIdx], occIdx
 
 
-def draw(
-    voxels,
-    T_velo_2_cam,
-    vox_origin,
-    fov_mask,
-    img_size,
-    f,
-    voxel_size=0.2,
-    d=7,  # 7m - determine the size of the mesh representing the camera
-):
-    # Compute the coordinates of the mesh representing camera
-    x = d * img_size[0] / (2 * f)
-    y = d * img_size[1] / (2 * f)
-    tri_points = np.array(
-        [
-            [0, 0, 0],
-            [x, y, d],
-            [-x, y, d],
-            [-x, -y, d],
-            [x, -y, d],
-        ]
-    )
-    # tri_points = np.hstack([tri_points, np.ones((5, 1))])
-    # tri_points = (np.linalg.inv(T_velo_2_cam) @ tri_points.T).T
-    x = tri_points[:, 0]
-    y = tri_points[:, 1]
-    z = tri_points[:, 2]
-    triangles = [
-        (0, 1, 2),
-        (0, 1, 4),
-        (0, 3, 4),
-        (0, 2, 3),
-    ]
+def voxel_profile(voxel, voxel_size):
+    """
+    Args:
+        voxel: (N, 3)  3:(x, y, z)
+        voxel_size: (vx, vy, vz)
 
-    # Compute the voxels coordinates
-    grid_coords = get_grid_coords(
-        [voxels.shape[0], voxels.shape[1], voxels.shape[2]], voxel_size
-    )
-
-    # Attach the predicted class to every voxel
-    grid_coords = np.vstack([grid_coords.T, voxels.reshape(-1)]).T
-
-    # Get the voxels inside FOV
-    fov_grid_coords = grid_coords
-
-    # # Get the voxels outside FOV
-    # outfov_grid_coords = grid_coords[~fov_mask, :]
-
-    # Remove empty and unknown voxels
-    fov_voxels = fov_grid_coords[
-        (fov_grid_coords[:, 3] > 0) & (fov_grid_coords[:, 3] < 255)
-    ]
-    # outfov_voxels = outfov_grid_coords[
-    #     (outfov_grid_coords[:, 3] > 0) & (outfov_grid_coords[:, 3] < 255)
-    # ]
-
-    figure = mlab.figure(size=(1400, 1400), bgcolor=(1, 1, 1))
-
-    # Draw the camera
-    # mlab.triangular_mesh(
-    #     x, y, z, triangles, representation="wireframe", color=(0, 0, 0), line_width=5
-    # )
-
-    
-    # counter = Counter(list(fov_voxels[:,3].reshape(-1)))
-    # for key in counter:
-    #     if counter[key] < 100:
-    #         index = fov_voxels[:,3] != key
-    #         fov_voxels = fov_voxels[index]
-    # Draw occupied inside FOV voxels
-    plt_plot_fov = mlab.points3d(
-        fov_voxels[:, 0],
-        fov_voxels[:, 1],
-        fov_voxels[:, 2],
-        fov_voxels[:, 3],
-        colormap="viridis",
-        scale_factor=voxel_size - 0.05 * voxel_size,
-        mode="cube",
-        opacity=1.0,
-        vmin=1,
-        vmax=19,
-    )
-
-    # Draw occupied outside FOV voxels
-    # plt_plot_outfov = mlab.points3d(
-    #     outfov_voxels[:, 0],
-    #     outfov_voxels[:, 1],
-    #     outfov_voxels[:, 2],
-    #     outfov_voxels[:, 3],
-    #     colormap="viridis",
-    #     scale_factor=voxel_size - 0.05 * voxel_size,
-    #     mode="cube",
-    #     opacity=1.0,
-    #     vmin=1,
-    #     vmax=19,
-    # )
-
-    classname_to_color = {  # RGB.
-        "noise": (0, 0, 0),  # Black.
-        "animal": (70, 130, 180),  # Steelblue
-        "human.pedestrian.adult": (0, 0, 230),  # Blue
-        "human.pedestrian.child":(0, 0, 230),  # Skyblue,
-        "human.pedestrian.construction_worker":(0, 0, 230),  # Cornflowerblue
-        "human.pedestrian.personal_mobility": (0, 0, 230),  # Palevioletred
-        "human.pedestrian.police_officer":(0, 0, 230),  # Navy,
-        "human.pedestrian.stroller": (0, 0, 230),  # Lightcoral
-        "human.pedestrian.wheelchair": (0, 0, 230),  # Blueviolet
-        "movable_object.barrier": (112, 128, 144),  # Slategrey
-        "movable_object.debris": (112, 128, 144),  # Chocolate
-        "movable_object.pushable_pullable":(112, 128, 144),  # Dimgrey
-        "movable_object.trafficcone":(112, 128, 144),  # Darkslategrey
-        "static_object.bicycle_rack": (188, 143, 143),  # Rosybrown
-        "vehicle.bicycle": (220, 20, 60),  # Crimson
-        "vehicle.bus.bendy":(255, 158, 0),  # Coral
-        "vehicle.bus.rigid": (255, 158, 0),  # Orangered
-        "vehicle.car": (255, 158, 0),  # Orange
-        "vehicle.construction":(255, 158, 0),  # Darksalmon
-        "vehicle.emergency.ambulance":(255, 158, 0),
-        "vehicle.emergency.police": (255, 158, 0),  # Gold
-        "vehicle.motorcycle": (255, 158, 0),  # Red
-        "vehicle.trailer":(255, 158, 0),  # Darkorange
-        "vehicle.truck": (255, 158, 0),  # Tomato
-        "flat.driveable_surface": (0, 207, 191),  # nuTonomy green
-        "flat.other":(0, 207, 191),
-        "flat.sidewalk": (75, 0, 75),
-        "flat.terrain": (0, 207, 191),
-        "static.manmade": (222, 184, 135),  # Burlywood
-        "static.other": (0, 207, 191),  # Bisque
-        "static.vegetation": (0, 175, 0),  # Green
-        "vehicle.ego": (255, 240, 245)
-    }
-    
-    classname_to_color= {'ignore_class': (0, 0, 0),  # Black.
-                'barrier': (112, 128, 144),  # Slategrey
-                'bicycle': (220, 20, 60),  # Crimson
-                'bus': (255, 127, 80),  # Coral
-                'car': (255, 158, 0),  # Orange
-                'construction_vehicle': (233, 150, 70),  # Darksalmon
-                'motorcycle': (255, 61, 99),  # Red
-                'pedestrian': (0, 0, 230),  # Blue
-                'traffic_cone': (47, 79, 79),  # Darkslategrey
-                'trailer': (255, 140, 0),  # Darkorange
-                'truck': (255, 99, 71),  # Tomato
-                'driveable_surface': (0, 207, 191),  # nuTonomy green
-                'other_flat': (175, 0, 75),
-                'sidewalk': (75, 0, 75),
-                'terrain': (112, 180, 60),
-                'manmade': (222, 184, 135),  # Burlywood
-                'vegetation': (0, 175, 0)}
-    colors = np.array(list(classname_to_color.values())).astype(np.uint8)
-    alpha = np.ones((colors.shape[0], 1), dtype=np.uint8) * 255
-    colors = np.hstack([colors, alpha])
+    Returns:
+        box: (N, 7) (x, y, z - dz/2, vx, vy, vz, 0)
+    """
+    centers = torch.cat((voxel[:, :2], voxel[:, 2][:, None] - voxel_size[2] / 2), dim=1)     # (x, y, z - dz/2)
+    # centers = voxel
+    wlh = torch.cat((torch.tensor(voxel_size[0]).repeat(centers.shape[0])[:, None],
+                     torch.tensor(voxel_size[1]).repeat(centers.shape[0])[:, None],
+                     torch.tensor(voxel_size[2]).repeat(centers.shape[0])[:, None]), dim=1)
+    yaw = torch.full_like(centers[:, 0:1], 0)
+    return torch.cat((centers, wlh, yaw), dim=1)
 
 
+def rotz(t):
+    """Rotation about the z-axis."""
+    c = torch.cos(t)
+    s = torch.sin(t)
+    return torch.tensor([[c, -s,  0],
+                     [s,  c,  0],
+                     [0,  0,  1]])
 
-    plt_plot_fov.glyph.scale_mode = "scale_by_vector"
-    # plt_plot_outfov.glyph.scale_mode = "scale_by_vector"
 
-    plt_plot_fov.module_manager.scalar_lut_manager.lut.table = colors
-    plt_plot_fov.module_manager.scalar_lut_manager.data_range = [0, 17]
+def my_compute_box_3d(center, size, heading_angle):
+    """
+    Args:
+        center: (N, 3)  3: (x, y, z - dz/2)
+        size: (N, 3)    3: (vx, vy, vz)
+        heading_angle: (N, 1)
+    Returns:
+        corners_3d: (N, 8, 3)
+    """
+    h, w, l = size[:, 2], size[:, 0], size[:, 1]
+    center[:, 2] = center[:, 2] + h / 2
+    l, w, h = (l / 2).unsqueeze(1), (w / 2).unsqueeze(1), (h / 2).unsqueeze(1)
+    x_corners = torch.cat([-l, l, l, -l, -l, l, l, -l], dim=1)[..., None]
+    y_corners = torch.cat([w, w, -w, -w, w, w, -w, -w], dim=1)[..., None]
+    z_corners = torch.cat([h, h, h, h, -h, -h, -h, -h], dim=1)[..., None]
+    corners_3d = torch.cat([x_corners, y_corners, z_corners], dim=2)
+    corners_3d[..., 0] += center[:, 0:1]
+    corners_3d[..., 1] += center[:, 1:2]
+    corners_3d[..., 2] += center[:, 2:3]
+    return corners_3d
 
-    mlab.show()
 
-def voxel_exist(voxels, x,y,z):
-    if x < 0 or y < 0 or z < 0 or x >= voxels.shape[0] or y >= voxels.shape[1] or z >= voxels.shape[2]:
-        return False
+def show_point_cloud(points: np.ndarray, colors=True, points_colors=None, bbox3d=None, voxelize=False,
+                     bbox_corners=None, linesets=None, vis=None, offset=[0,0,0], large_voxel=True, voxel_size=0.4):
+    """
+    :param points: (N, 3)  3:(x, y, z)
+    :param colors: false 不显示点云颜色
+    :param points_colors: (N, 4）
+    :param bbox3d: voxel grid (N, 7) 7: (center, wlh, yaw=0)
+    :param voxelize: false 不显示voxel边界
+    :param bbox_corners: (N, 8, 3)  voxel grid 角点坐标, 用于绘制voxel grid 边界.
+    :param linesets: 用于绘制voxel grid 边界.
+    :return:
+    """
+    if vis is None:
+        vis = o3d.visualization.VisualizerWithKeyCallback()
+        vis.create_window()
+    if isinstance(offset, list) or isinstance(offset, tuple):
+        offset = np.array(offset)
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points+offset)
+    if colors:
+        pcd.colors = o3d.utility.Vector3dVector(points_colors[:, :3])
+    mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(
+        size=1, origin=[0, 0, 0])
+
+    voxelGrid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=voxel_size)
+    if large_voxel:
+        vis.add_geometry(voxelGrid)
     else:
-        return voxels[x,y,z]
+        vis.add_geometry(pcd)
 
-def max_connected(voxels, distance=3):
-    """ Keep the max connected component of the voxels (a boolean matrix). 
-    distance is the distance considered as neighbors, i.e. if distance = 2, 
-    then two blocks are considered connected even with a hole in between"""
-    assert(distance > 0)
-    component_list = []
-    # max_component = np.zeros(voxels.shape)
-    voxels_copy = np.copy(voxels)
-    for startx in range(voxels.shape[0]):
-        for starty in range(voxels.shape[1]):
-            for startz in range(voxels.shape[2]):
-                if not voxels_copy[startx,starty,startz]:
-                    continue
-                # start a new component
-                component = np.zeros(voxels.shape, dtype=bool)
-                stack = [[startx,starty,startz]]
-                component[startx,starty,startz] = True
-                voxels_copy[startx,starty,startz] = False
-                while len(stack) > 0:
-                    x,y,z = stack.pop()
-                    category = voxels[x,y,z]
-                    for i in range(x-distance, x+distance + 1):
-                        for j in range(y-distance, y+distance + 1):
-                            for k in range(z-distance, z+distance + 1):
-                                if (i-x)**2+(j-y)**2+(k-z)**2 > distance * distance:
-                                    continue
-                                category = voxels[x,y,z]
-                                if voxel_exist(voxels_copy, i,j,k) and voxels[i,j,k] == category:
-                                    voxels_copy[i,j,k] = False
-                                    component[i,j,k] = True
-                                    stack.append([i,j,k])
-                component_list.append(component)
-                # if component.sum() > max_component.sum():
-                #     max_component = component
-                    
+    if voxelize:
+        line_sets = o3d.geometry.LineSet()
+        line_sets.points = o3d.open3d.utility.Vector3dVector(bbox_corners.reshape((-1, 3))+offset)
+        line_sets.lines = o3d.open3d.utility.Vector2iVector(linesets.reshape((-1, 2)))
+        line_sets.paint_uniform_color((0, 0, 0))
+        vis.add_geometry(line_sets)
 
-    max_component = np.zeros(voxels.shape,  dtype=bool)
-    for each in component_list:
-        if each.sum()>10:
-            max_component |= each
-    return max_component 
+    vis.add_geometry(mesh_frame)
 
-# points = remove_far(points, point_cloud_range)
-def main(filepath):
+    # ego_pcd = o3d.geometry.PointCloud()
+    # ego_points = generate_the_ego_car()
+    # ego_pcd.points = o3d.utility.Vector3dVector(ego_points)
+    # vis.add_geometry(ego_pcd)
 
-    # res = mmcv.load(filepath)
-    # pred_occ = res['occ'][0]
-    # gt_occ = res['occ'][0]
-    # print(f"pred_occ.shape:{pred_occ.shape}")
-    # print(f"gt_occ.shape:{gt_occ.shape}")
-    # exit()
+    return vis
 
-    vox_origin = np.array([0, 0, -2])
 
-    # y_pred = points2voxel(points, voxel_shape, voxel_size, 20)
-    # y_del = ~max_connected(y_pred)
-    # y_pred[y_del] = 0
-   
-    if filepath.endswith('npy'):
-        y_pred = np.load(filepath)
-    elif filepath.endswith('npz'):
-        y_pred = np.load(filepath)['gt']# ['semantics']
+def show_occ(occ_state, occ_show, voxel_size, vis=None, offset=[0, 0, 0]):
+    """
+    Args:
+        occ_state: (Dx, Dy, Dz), cls_id
+        occ_show: (Dx, Dy, Dz), bool
+        voxel_size: [0.4, 0.4, 0.4]
+        vis: Visualizer
+        offset:
 
-    y_pred = y_pred[0]
-    # y_pred: shape 200x200x16
-    draw(
-        y_pred,
-        None,
-        vox_origin,
-        None,
-        voxel_size=0.4,
-        f=552.55426,
-        img_size=(1600, 900),
-        d=7,
+    Returns:
+
+    """
+    colors = colormap_to_colors / 255
+    pcd, labels, occIdx = voxel2points(occ_state, occ_show, voxel_size)
+    # pcd: (N, 3)  3: (x, y, z)
+    # labels: (N, )  cls_id
+    _labels = labels % len(colors)
+    pcds_colors = colors[_labels]   # (N, 4)
+
+    bboxes = voxel_profile(pcd, voxel_size)    # (N, 7)   7: (x, y, z - dz/2, dx, dy, dz, 0)
+    bboxes_corners = my_compute_box_3d(bboxes[:, 0:3], bboxes[:, 3:6], bboxes[:, 6:7])      # (N, 8, 3)
+
+    bases_ = torch.arange(0, bboxes_corners.shape[0] * 8, 8)
+    edges = torch.tensor([[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]])  # lines along y-axis
+    edges = edges.reshape((1, 12, 2)).repeat(bboxes_corners.shape[0], 1, 1)     # (N, 12, 2)
+    # (N, 12, 2) + (N, 1, 1) --> (N, 12, 2)   此时edges中记录的是bboxes_corners的整体id: (0, N*8).
+    edges = edges + bases_[:, None, None]
+
+    vis = show_point_cloud(
+        points=pcd.numpy(),
+        colors=True,
+        points_colors=pcds_colors,
+        voxelize=True,
+        bbox3d=bboxes.numpy(),
+        bbox_corners=bboxes_corners.numpy(),
+        linesets=edges.numpy(),
+        vis=vis,
+        offset=offset,
+        large_voxel=True,
+        voxel_size=0.4
     )
+    return vis
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='vis occ')
-    parser.add_argument('path', help='path to pred result')
+
+def generate_the_ego_car():
+    ego_range = [-2, -1, 0, 2, 1, 1.5]
+    ego_voxel_size=[0.1, 0.1, 0.1]
+    ego_xdim = int((ego_range[3] - ego_range[0]) / ego_voxel_size[0])
+    ego_ydim = int((ego_range[4] - ego_range[1]) / ego_voxel_size[1])
+    ego_zdim = int((ego_range[5] - ego_range[2]) / ego_voxel_size[2])
+    temp_x = np.arange(ego_xdim)
+    temp_y = np.arange(ego_ydim)
+    temp_z = np.arange(ego_zdim)
+    ego_xyz = np.stack(np.meshgrid(temp_y, temp_x, temp_z), axis=-1).reshape(-1, 3)
+    ego_point_x = (ego_xyz[:, 0:1] + 0.5) / ego_xdim * (ego_range[3] - ego_range[0]) + ego_range[0]
+    ego_point_y = (ego_xyz[:, 1:2] + 0.5) / ego_ydim * (ego_range[4] - ego_range[1]) + ego_range[1]
+    ego_point_z = (ego_xyz[:, 2:3] + 0.5) / ego_zdim * (ego_range[5] - ego_range[2]) + ego_range[2]
+    ego_point_xyz = np.concatenate((ego_point_y, ego_point_x, ego_point_z), axis=-1)
+    ego_points_label =  (np.ones((ego_point_xyz.shape[0]))*16).astype(np.uint8)
+    ego_dict = {}
+    ego_dict['point'] = ego_point_xyz
+    ego_dict['label'] = ego_points_label
+    return ego_point_xyz
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Visualize the predicted '
+                                     'result of nuScenes')
+    parser.add_argument(
+        'res', help='Path to the predicted result')
+    parser.add_argument(
+        '--canva-size', type=int, default=1000, help='Size of canva in pixel')
+    parser.add_argument(
+        '--vis-frames',
+        type=int,
+        default=500,
+        help='Number of frames for visualization')
+    parser.add_argument(
+        '--scale-factor',
+        type=int,
+        default=4,
+        help='Trade-off between image-view and bev in size of '
+        'the visualized canvas')
+    parser.add_argument(
+        '--version',
+        type=str,
+        default='val',
+        help='Version of nuScenes dataset')
+    parser.add_argument('--draw-gt', action='store_true')
+    parser.add_argument(
+        '--root_path',
+        type=str,
+        default='./data/nuscenes',
+        help='Path to nuScenes dataset')
+    parser.add_argument(
+        '--save_path',
+        type=str,
+        default='./vis',
+        help='Path to save visualization results')
+    parser.add_argument(
+        '--format',
+        type=str,
+        default='image',
+        choices=['video', 'image'],
+        help='The desired format of the visualization result')
+    parser.add_argument(
+        '--fps', type=int, default=10, help='Frame rate of video')
+    parser.add_argument(
+        '--video-prefix', type=str, default='vis', help='name of video')
     args = parser.parse_args()
-    main(args.path)
-    # res = mmcv.load(args.path)
-    # pred_occ = res['occ']
-    # gt_occ = res['gt_occ']
-    # print(f"len(pred_occ):{len(pred_occ)}")
-    # print(f"len(gt_occ):{len(gt_occ)}")
-    # print(f"type(pred_occ[0]):{type(pred_occ[0])}")
-    # np.savez('./example.npz', pred=pred_occ, gt=gt_occ)
+    return args
+
+
+def main():
+    args = parse_args()
+    # load predicted results
+    results_dir = args.res
+
+    nusc = NuScenes(version='v1.0-trainval', 
+                    dataroot=args.root_path,
+                    verbose=True)
+
+    # load dataset information
+    info_path = args.root_path + '/bevdetv2-nuscenes_infos_%s.pkl' % args.version
+    dataset = pickle.load(open(info_path, 'rb'))
+    # prepare save path and medium
+    vis_dir = args.save_path
+    if not os.path.exists(vis_dir):
+        os.makedirs(vis_dir)
+    print('saving visualized result to %s' % vis_dir)
+    scale_factor = args.scale_factor
+    canva_size = args.canva_size
+    if args.format == 'video':
+        fourcc = cv2.VideoWriter_fourcc('m', 'p', '4', 'v')
+        vout = cv2.VideoWriter(
+            os.path.join(vis_dir, '%s.mp4' % args.video_prefix), fourcc,
+            args.fps, (int(1600 / scale_factor * 3),
+                       int(900 / scale_factor * 2 + canva_size)))
+
+    views = [
+        'CAM_FRONT_LEFT', 'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_LEFT',
+        'CAM_BACK', 'CAM_BACK_RIGHT'
+    ]
+    print('start visualizing results')
+
+    vis = o3d.visualization.VisualizerWithKeyCallback()
+    vis.create_window()
+
+    for cnt, info in enumerate(
+            dataset['infos'][:min(args.vis_frames, len(dataset['infos']))]):
+        if cnt % 10 == 0:
+            print('%d/%d' % (cnt, min(args.vis_frames, len(dataset['infos']))))
+
+        scene_name = nusc.get('scene', info['scene_token'])['name']
+        # scene_name = info['scene_name']
+        sample_token = info['token']
+
+        pred_occ_path = os.path.join(results_dir, scene_name, sample_token, 'pred.npz')
+        gt_occ_path = info['occ_path']
+
+        pred_occ = np.load(pred_occ_path)['pred']
+        gt_data = np.load(os.path.join(gt_occ_path, 'labels.npz'))
+        voxel_label = gt_data['semantics']
+        lidar_mask = gt_data['mask_lidar']
+        camera_mask = gt_data['mask_camera']
+
+        # load imgs
+        imgs = []
+        for view in views:
+            img = cv2.imread(info['cams'][view]['data_path'])
+            imgs.append(img)
+
+        # occ_canvas
+        voxel_show = np.logical_and(pred_occ != FREE_LABEL, camera_mask)
+        # voxel_show = pred_occ != FREE_LABEL
+        voxel_size = VOXEL_SIZE
+        vis = show_occ(torch.from_numpy(pred_occ), torch.from_numpy(voxel_show), voxel_size=voxel_size, vis=vis,
+                       offset=[0, pred_occ.shape[0] * voxel_size[0] * 1.2 * 0, 0])
+
+        if args.draw_gt:
+            voxel_show = np.logical_and(voxel_label != FREE_LABEL, camera_mask)
+            vis = show_occ(torch.from_numpy(voxel_label), torch.from_numpy(voxel_show), voxel_size=voxel_size, vis=vis,
+                           offset=[0, voxel_label.shape[0] * voxel_size[0] * 1.2 * 1, 0])
+
+        view_control = vis.get_view_control()
+
+        look_at = np.array([-0.185, 0.513, 3.485])
+        front = np.array([-0.974, -0.055, 0.221])
+        up = np.array([0.221, 0.014, 0.975])
+        zoom = np.array([0.08])
+
+        view_control.set_lookat(look_at)
+        view_control.set_front(front)
+        view_control.set_up(up)
+        view_control.set_zoom(zoom)
+
+        opt = vis.get_render_option()
+        opt.background_color = np.asarray([1, 1, 1])
+        opt.line_width = 5
+
+        vis.poll_events()
+        vis.update_renderer()
+        vis.run()
+
+        # if args.format == 'image':
+        #     out_dir = os.path.join(vis_dir, f'{scene_name}', f'{sample_token}')
+        #     mmcv.mkdir_or_exist(out_dir)
+        #     vis.capture_screen_image(os.path.join(out_dir, 'screen_occ.png'), do_render=True)
+
+        occ_canvas = vis.capture_screen_float_buffer(do_render=True)
+        occ_canvas = np.asarray(occ_canvas)
+        occ_canvas = (occ_canvas * 255).astype(np.uint8)
+        occ_canvas = occ_canvas[..., [2, 1, 0]]
+        occ_canvas_resize = cv2.resize(occ_canvas, (canva_size, canva_size), interpolation=cv2.INTER_CUBIC)
+
+        vis.clear_geometries()
+
+        big_img = np.zeros((900 * 2 + canva_size * scale_factor, 1600 * 3, 3),
+                       dtype=np.uint8)
+        big_img[:900, :, :] = np.concatenate(imgs[:3], axis=1)
+        img_back = np.concatenate(
+            [imgs[3][:, ::-1, :], imgs[4][:, ::-1, :], imgs[5][:, ::-1, :]],
+            axis=1)
+        big_img[900 + canva_size * scale_factor:, :, :] = img_back
+        big_img = cv2.resize(big_img, (int(1600 / scale_factor * 3),
+                                       int(900 / scale_factor * 2 + canva_size)))
+        w_begin = int((1600 * 3 / scale_factor - canva_size) // 2)
+        big_img[int(900 / scale_factor):int(900 / scale_factor) + canva_size,
+                w_begin:w_begin + canva_size, :] = occ_canvas_resize
+
+        if args.format == 'image':
+            out_dir = os.path.join(vis_dir, f'{scene_name}', f'{sample_token}')
+            mmcv.mkdir_or_exist(out_dir)
+            for i, img in enumerate(imgs):
+                cv2.imwrite(os.path.join(out_dir, f'img{i}.png'), img)
+            cv2.imwrite(os.path.join(out_dir, 'occ.png'), occ_canvas)
+            cv2.imwrite(os.path.join(out_dir, 'overall.png'), big_img)
+        elif args.format == 'video':
+            cv2.putText(big_img, f'{cnt:{cnt}}', (5, 15), fontFace=cv2.FONT_HERSHEY_COMPLEX, color=(0, 0, 0),
+                        fontScale=0.5)
+            cv2.putText(big_img, f'{scene_name}', (5, 35), fontFace=cv2.FONT_HERSHEY_COMPLEX, color=(0, 0, 0),
+                        fontScale=0.5)
+            cv2.putText(big_img, f'{sample_token[:5]}', (5, 55), fontFace=cv2.FONT_HERSHEY_COMPLEX, color=(0, 0, 0),
+                        fontScale=0.5)
+            vout.write(big_img)
+
+    if args.format == 'video':
+        vout.release()
+    vis.destroy_window()
+
+
+if __name__ == '__main__':
+    setproctitle.setproctitle("dzp_vis")
+    main()

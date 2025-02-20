@@ -261,6 +261,9 @@ def main():
             ]:
                 eval_kwargs.pop(key, None)
             eval_kwargs.update(dict(metric=args.eval, **kwargs))
+
+            # 使用 --eval-options show_dir=... 参数进行可视化输出时
+            # 进入 NuScenesDatasetOccpancy 的 evaluate 方法
             print(dataset.evaluate(outputs, **eval_kwargs))
 
 
