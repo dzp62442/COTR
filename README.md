@@ -87,8 +87,8 @@ CUDA_VISIBLE_DEVICES=1 ./tools/dist_test_occ.sh configs/cotr/cotr-surroundocc-r5
 
 - 依赖库
 ```shell
-pip install vtk==9.4.0 configobj
-pip install mayavi==4.8.2 PyQt5  # 3090 服务器没有安装 Qt 系统库，无法运行
+pip install vtk==9.0.1 configobj
+pip install mayavi==4.7.3 PyQt5  # 3090 服务器没有安装 Qt 系统库，无法运行
 ```
 
 - 输出 pkl 格式的结果文件
