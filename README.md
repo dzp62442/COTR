@@ -117,7 +117,7 @@ python tools/analysis_tools/generate_gifs.py --scene-dir $scenedir
 
 - 依赖库
 ```shell
-pip install open3d==0.15.2 setuptools==59.5.0
+pip install open3d==0.15.2 setuptools==59.5.0 protobuf==3.20.0 tensorboard==2.12.0
 ```
 
 - 输出 npz 格式的结果文件
