@@ -10,6 +10,8 @@ from typing import Tuple, List, Dict, Iterable
 import argparse
 import cv2
 from nuscenes.nuscenes import NuScenes
+from nuscenes.utils.geometry_utils import transform_matrix
+from nuscenes.eval.common.utils import quaternion_yaw, Quaternion
 
 NOT_OBSERVED = -1
 FREE = 0
@@ -70,7 +72,16 @@ val_night = ['scene-1059', 'scene-1060', 'scene-1061', 'scene-1062',
             'scene-1067', 'scene-1068', 'scene-1069', 'scene-1070', 
             'scene-1071', 'scene-1072', 'scene-1073']
 
-
+def rt2mat(translation, quaternion=None, inverse=False, rotation=None):
+    R = Quaternion(quaternion).rotation_matrix if rotation is None else rotation
+    T = np.array(translation)
+    if inverse:
+        R = R.T
+        T = -R @ T
+    mat = np.eye(4)
+    mat[:3, :3] = R
+    mat[:3, 3] = T
+    return mat
 
 def voxel2points(voxel, occ_show, voxelSize):
     """
@@ -254,6 +265,117 @@ def generate_the_ego_car():
     return ego_point_xyz
 
 
+def draw_frame(vis, view_control, look_at, front, up, zoom):
+    """
+    指定视角并渲染一帧
+
+    Args:
+        vis: Visualizer
+    """
+
+    view_control.set_lookat(look_at)
+    view_control.set_front(front)
+    view_control.set_up(up)
+    view_control.set_zoom(zoom)
+
+    opt = vis.get_render_option()
+    opt.background_color = np.asarray([1, 1, 1])
+    opt.line_width = 5
+
+    vis.poll_events()
+    vis.update_renderer()
+    vis.run()
+
+    occ_canvas = vis.capture_screen_float_buffer(do_render=True)
+    occ_canvas = np.asarray(occ_canvas)
+    occ_canvas = (occ_canvas * 255).astype(np.uint8)
+    occ_canvas = occ_canvas[..., [2, 1, 0]]
+
+    return occ_canvas
+
+def draw(vis, imgs, out_dir, save_format, cam_positions=None, focal_positions=None, cam_names=None, canva_size=1000, scale_factor=4, mode='pred'):
+    """
+    根据 open3d Visualizer 渲染指定视角的图像并保存
+
+    Args:
+        vis: Visualizer
+        save_format: args.format, image or video
+        cam_positions: (Dx, Dy, Dz), bool
+        focal_positions: [0.4, 0.4, 0.4]
+        cam_names: Visualizer
+        mode: pred or gt
+    """
+
+    view_control = vis.get_view_control()
+
+    #! 渲染常规视角图像并保存
+    look_at = np.array([-0.185, 0.513, 3.485])
+    front = np.array([-0.974, -0.055, 0.221])
+    up = np.array([0.221, 0.014, 0.975])
+    zoom = np.array([0.08])
+
+    normal_frame = draw_frame(vis, view_control, look_at, front, up, zoom)
+    normal_frame_resize = cv2.resize(normal_frame, (canva_size, canva_size), interpolation=cv2.INTER_CUBIC)
+
+    overall_img = np.zeros((900 * 2 + canva_size * scale_factor, 1600 * 3, 3), dtype=np.uint8)
+    overall_img[:900, :, :] = np.concatenate(imgs[:3], axis=1)
+    img_back = np.concatenate([imgs[3][:, ::-1, :], imgs[4][:, ::-1, :], imgs[5][:, ::-1, :]], axis=1)
+    overall_img[900 + canva_size * scale_factor:, :, :] = img_back
+    overall_img = cv2.resize(overall_img, (int(1600 / scale_factor * 3), int(900 / scale_factor * 2 + canva_size)))
+    w_begin = int((1600 * 3 / scale_factor - canva_size) // 2)
+    overall_img[int(900 / scale_factor):int(900 / scale_factor) + canva_size,
+            w_begin:w_begin + canva_size, :] = normal_frame_resize
+
+    if save_format == 'image':
+        mmcv.mkdir_or_exist(out_dir)
+        cv2.imwrite(os.path.join(out_dir, mode+'_normal.png'), normal_frame)
+        cv2.imwrite(os.path.join(out_dir, mode+'_overall.png'), overall_img)
+    
+    #! 渲染鸟瞰视角图像并保存
+    if save_format == 'image':
+        look_at = np.array([0.75131739,  0.78265103, 92.21378558])
+        front = np.array([0.75131739,  0.78265103, 93.21378558])
+        up = np.array([0., 1., 0.])
+        zoom = np.array([0.01])
+
+        bev_frame = draw_frame(vis, view_control, look_at, front, up, zoom)
+        cv2.imwrite(os.path.join(out_dir, mode+'_bev.png'), bev_frame)
+    
+    #! 渲染六相机分立图像并保存
+    if save_format == 'image':
+        cam_frames = []
+        for i, cam_name in enumerate(cam_names):
+            cam_position = cam_positions[i]
+            focal_position = focal_positions[i]
+            look_at = focal_position
+            front = cam_position
+            up = np.array([0., 0., 1.])
+            zoom = np.array([0.5]) if i!=3 else np.array([0.8])  # 后相机视场角不同
+            cam_frame = draw_frame(vis, view_control, look_at, front, up, zoom)
+            cam_frames.append(cam_frame)
+
+        img_size = imgs[0].shape  # 获取第一个原始图像的大小
+
+        canva_size = 100  # 假设 canvas 尺寸
+        scale_factor = 1  # 假设没有缩放
+        split_img = np.zeros((img_size[0] * 4, img_size[1] * 3, 3), dtype=np.uint8)  # 创建一个空的大图，4行3列
+        split_img[:img_size[0], :, :] = np.concatenate(imgs[:3], axis=1)  # 将前 3 张原始图像拼接到大图的第一行    
+        img_back = np.concatenate([imgs[3][:, ::-1, :], imgs[4][:, ::-1, :], imgs[5][:, ::-1, :]], axis=1)
+        split_img[img_size[0] * 2: img_size[0] * 2 + img_size[0], :, :] = img_back  # 将后 3 张原始图像反转并拼接到大图的第三行
+
+        # 将 cam_frames 中的每张渲染图像调整为原图像大小，并拼接到大图的第二行和第四行
+        for i in range(3):
+            occ_resized = cv2.resize(cam_frames[i], (img_size[1], img_size[0]))  # 调整 occ 图像尺寸
+            split_img[img_size[0]:img_size[0] * 2, i * img_size[1]:(i + 1) * img_size[1], :] = occ_resized
+        for i in range(3, 6):
+            occ_resized = cv2.resize(cam_frames[i], (img_size[1], img_size[0]))  # 调整 occ 图像尺寸
+            split_img[img_size[0] * 3:img_size[0] * 4, (i - 3) * img_size[1]:(i - 2) * img_size[1], :] = occ_resized
+
+        cv2.imwrite(os.path.join(out_dir, mode+'_split.png'), split_img)
+    
+    return split_img
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Visualize the predicted '
                                      'result of nuScenes')
@@ -266,7 +388,7 @@ def parse_args():
     parser.add_argument(
         '--vis-frames',
         type=int,
-        default=100,
+        default=1,
         help='Max number of frames for visualization')
     parser.add_argument(
         '--scale-factor',
@@ -366,6 +488,17 @@ def main():
             img = cv2.imread(info['cams'][view]['data_path'])
             imgs.append(img)
 
+        # 解析 nuscenes 相机位姿变换
+        cam_positions, focal_positions, cam_names = [], [], []
+        for cam_type, cam_info in info['cams'].items():
+            cam_names.append(cam_type)
+            cam2ego = rt2mat(cam_info['sensor2ego_translation'], cam_info['sensor2ego_rotation'])
+            f = 0.0055
+            cam_position = cam2ego @ np.array([0., 0., 0., 1.]).reshape([4, 1])  # 相机位置
+            cam_positions.append(cam_position.flatten()[:3])
+            focal_position = cam2ego @ np.array([0., 0., f, 1.]).reshape([4, 1])  # 相机的焦点位置
+            focal_positions.append(focal_position.flatten()[:3])
+
         # occ_canvas
         voxel_show = np.logical_and(pred_occ != FREE_LABEL, camera_mask)
         # voxel_show = pred_occ != FREE_LABEL
@@ -378,65 +511,21 @@ def main():
             vis = show_occ(torch.from_numpy(voxel_label), torch.from_numpy(voxel_show), voxel_size=voxel_size, vis=vis,
                            offset=[0, voxel_label.shape[0] * voxel_size[0] * 1.2 * 1, 0])
 
-        view_control = vis.get_view_control()
-
-        look_at = np.array([-0.185, 0.513, 3.485])
-        front = np.array([-0.974, -0.055, 0.221])
-        up = np.array([0.221, 0.014, 0.975])
-        zoom = np.array([0.08])
-
-        view_control.set_lookat(look_at)
-        view_control.set_front(front)
-        view_control.set_up(up)
-        view_control.set_zoom(zoom)
-
-        opt = vis.get_render_option()
-        opt.background_color = np.asarray([1, 1, 1])
-        opt.line_width = 5
-
-        vis.poll_events()
-        vis.update_renderer()
-        vis.run()
-
-        # if args.format == 'image':
-        #     out_dir = os.path.join(vis_dir, f'{scene_name}', f'{sample_token}')
-        #     mmcv.mkdir_or_exist(out_dir)
-        #     vis.capture_screen_image(os.path.join(out_dir, 'screen_occ.png'), do_render=True)
-
-        occ_canvas = vis.capture_screen_float_buffer(do_render=True)
-        occ_canvas = np.asarray(occ_canvas)
-        occ_canvas = (occ_canvas * 255).astype(np.uint8)
-        occ_canvas = occ_canvas[..., [2, 1, 0]]
-        occ_canvas_resize = cv2.resize(occ_canvas, (canva_size, canva_size), interpolation=cv2.INTER_CUBIC)
+        out_dir = os.path.join(vis_dir, f'{scene_name}', f'{cnt:04d}_{sample_token}')
+        overall_img = draw(vis, imgs, out_dir, args.format, 
+                       cam_positions=cam_positions, focal_positions=focal_positions, cam_names=cam_names, 
+                       canva_size=canva_size, scale_factor=scale_factor, mode='pred')
 
         vis.clear_geometries()
-
-        big_img = np.zeros((900 * 2 + canva_size * scale_factor, 1600 * 3, 3),
-                       dtype=np.uint8)
-        big_img[:900, :, :] = np.concatenate(imgs[:3], axis=1)
-        img_back = np.concatenate(
-            [imgs[3][:, ::-1, :], imgs[4][:, ::-1, :], imgs[5][:, ::-1, :]],
-            axis=1)
-        big_img[900 + canva_size * scale_factor:, :, :] = img_back
-        big_img = cv2.resize(big_img, (int(1600 / scale_factor * 3),
-                                       int(900 / scale_factor * 2 + canva_size)))
-        w_begin = int((1600 * 3 / scale_factor - canva_size) // 2)
-        big_img[int(900 / scale_factor):int(900 / scale_factor) + canva_size,
-                w_begin:w_begin + canva_size, :] = occ_canvas_resize
-
-        if args.format == 'image':
-            out_dir = os.path.join(vis_dir, f'{scene_name}', f'{cnt:04d}_{sample_token}')
-            mmcv.mkdir_or_exist(out_dir)
-            cv2.imwrite(os.path.join(out_dir, 'occ.png'), occ_canvas)
-            cv2.imwrite(os.path.join(out_dir, 'overall.png'), big_img)
-        elif args.format == 'video':
-            cv2.putText(big_img, f'{cnt:{cnt}}', (5, 15), fontFace=cv2.FONT_HERSHEY_COMPLEX, color=(0, 0, 0),
+        
+        if args.format == 'video':
+            cv2.putText(overall_img, f'{cnt:{cnt}}', (5, 15), fontFace=cv2.FONT_HERSHEY_COMPLEX, color=(0, 0, 0),
                         fontScale=0.5)
-            cv2.putText(big_img, f'{scene_name}', (5, 35), fontFace=cv2.FONT_HERSHEY_COMPLEX, color=(0, 0, 0),
+            cv2.putText(overall_img, f'{scene_name}', (5, 35), fontFace=cv2.FONT_HERSHEY_COMPLEX, color=(0, 0, 0),
                         fontScale=0.5)
-            cv2.putText(big_img, f'{sample_token[:5]}', (5, 55), fontFace=cv2.FONT_HERSHEY_COMPLEX, color=(0, 0, 0),
+            cv2.putText(overall_img, f'{sample_token[:5]}', (5, 55), fontFace=cv2.FONT_HERSHEY_COMPLEX, color=(0, 0, 0),
                         fontScale=0.5)
-            vout.write(big_img)
+            vout.write(overall_img)
 
     if args.format == 'video':
         vout.release()
