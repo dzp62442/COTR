@@ -73,6 +73,9 @@ val_night = ['scene-1059', 'scene-1060', 'scene-1061', 'scene-1062',
             'scene-1071', 'scene-1072', 'scene-1073']
 
 def rt2mat(translation, quaternion=None, inverse=False, rotation=None):
+    """
+    将平移向量和四元数旋转向量转换为 4x4 的变换矩阵
+    """
     R = Quaternion(quaternion).rotation_matrix if rotation is None else rotation
     T = np.array(translation)
     if inverse:
@@ -293,27 +296,26 @@ def draw_frame(vis, view_control, look_at, front, up, zoom):
 
     return occ_canvas
 
-def draw(vis, imgs, out_dir, save_format, cam_positions=None, focal_positions=None, cam_names=None, canva_size=1000, scale_factor=4, mode='pred'):
+def draw(vis, imgs, out_dir, save_format, cam_names, cam_positions, cam_fronts, cam_ups, canva_size=1000, scale_factor=4, mode='pred', offset=0):
     """
     根据 open3d Visualizer 渲染指定视角的图像并保存
 
     Args:
         vis: Visualizer
         save_format: args.format, image or video
-        cam_positions: (Dx, Dy, Dz), bool
-        focal_positions: [0.4, 0.4, 0.4]
         cam_names: Visualizer
         mode: pred or gt
     """
 
     view_control = vis.get_view_control()
+    for i, img in enumerate(imgs):
+        cv2.putText(img, cam_names[i], (25, 75), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 255), 4)
 
     #! 渲染常规视角图像并保存
-    look_at = np.array([-0.185, 0.513, 3.485])
-    front = np.array([-0.974, -0.055, 0.221])
+    look_at = np.array([-0.185, 0.513+offset, 3.485])
+    front = np.array([-1., 0., 0.2])
     up = np.array([0.221, 0.014, 0.975])
     zoom = np.array([0.08])
-
     normal_frame = draw_frame(vis, view_control, look_at, front, up, zoom)
     normal_frame_resize = cv2.resize(normal_frame, (canva_size, canva_size), interpolation=cv2.INTER_CUBIC)
 
@@ -333,11 +335,10 @@ def draw(vis, imgs, out_dir, save_format, cam_positions=None, focal_positions=No
     
     #! 渲染鸟瞰视角图像并保存
     if save_format == 'image':
-        look_at = np.array([0.75131739,  0.78265103, 92.21378558])
-        front = np.array([0.75131739,  0.78265103, 93.21378558])
+        look_at = np.array([0.,  0.+offset, 90.])
+        front = np.array([0.,  0., 90.])
         up = np.array([0., 1., 0.])
         zoom = np.array([0.01])
-
         bev_frame = draw_frame(vis, view_control, look_at, front, up, zoom)
         cv2.imwrite(os.path.join(out_dir, mode+'_bev.png'), bev_frame)
     
@@ -346,11 +347,12 @@ def draw(vis, imgs, out_dir, save_format, cam_positions=None, focal_positions=No
         cam_frames = []
         for i, cam_name in enumerate(cam_names):
             cam_position = cam_positions[i]
-            focal_position = focal_positions[i]
-            look_at = focal_position
-            front = cam_position
-            up = np.array([0., 0., 1.])
-            zoom = np.array([0.5]) if i!=3 else np.array([0.8])  # 后相机视场角不同
+            cam_front = cam_fronts[i]
+            cam_up = cam_ups[i]
+            look_at = cam_position + cam_front + [0., offset, 0.]
+            front = - cam_front
+            up = cam_up
+            zoom = np.array([0.002]) if i!=3 else np.array([0.012])  # 后相机视场角不同
             cam_frame = draw_frame(vis, view_control, look_at, front, up, zoom)
             cam_frames.append(cam_frame)
 
@@ -360,7 +362,7 @@ def draw(vis, imgs, out_dir, save_format, cam_positions=None, focal_positions=No
         scale_factor = 1  # 假设没有缩放
         split_img = np.zeros((img_size[0] * 4, img_size[1] * 3, 3), dtype=np.uint8)  # 创建一个空的大图，4行3列
         split_img[:img_size[0], :, :] = np.concatenate(imgs[:3], axis=1)  # 将前 3 张原始图像拼接到大图的第一行    
-        img_back = np.concatenate([imgs[3][:, ::-1, :], imgs[4][:, ::-1, :], imgs[5][:, ::-1, :]], axis=1)
+        img_back = np.concatenate(imgs[3:], axis=1)  # 后 3 张原始图像不翻转直接排成一行
         split_img[img_size[0] * 2: img_size[0] * 2 + img_size[0], :, :] = img_back  # 将后 3 张原始图像反转并拼接到大图的第三行
 
         # 将 cam_frames 中的每张渲染图像调整为原图像大小，并拼接到大图的第二行和第四行
@@ -373,7 +375,7 @@ def draw(vis, imgs, out_dir, save_format, cam_positions=None, focal_positions=No
 
         cv2.imwrite(os.path.join(out_dir, mode+'_split.png'), split_img)
     
-    return split_img
+    return overall_img
 
 
 def parse_args():
@@ -482,22 +484,20 @@ def main():
         lidar_mask = gt_data['mask_lidar']
         camera_mask = gt_data['mask_camera']
 
-        # load imgs
+        # 加载图像并解析 nuscenes 相机位姿变换
         imgs = []
-        for view in views:
+        cam_positions, cam_fronts, cam_ups, cam_names = [], [], [], []
+        for i, view in enumerate(views):
             img = cv2.imread(info['cams'][view]['data_path'])
             imgs.append(img)
-
-        # 解析 nuscenes 相机位姿变换
-        cam_positions, focal_positions, cam_names = [], [], []
-        for cam_type, cam_info in info['cams'].items():
-            cam_names.append(cam_type)
-            cam2ego = rt2mat(cam_info['sensor2ego_translation'], cam_info['sensor2ego_rotation'])
-            f = 0.0055
+            cam_names.append(view)
+            cam2ego = rt2mat(info['cams'][view]['sensor2ego_translation'], info['cams'][view]['sensor2ego_rotation'])
             cam_position = cam2ego @ np.array([0., 0., 0., 1.]).reshape([4, 1])  # 相机位置
             cam_positions.append(cam_position.flatten()[:3])
-            focal_position = cam2ego @ np.array([0., 0., f, 1.]).reshape([4, 1])  # 相机的焦点位置
-            focal_positions.append(focal_position.flatten()[:3])
+            cam_front = cam2ego @ np.array([0., 0., 1., 0.]).reshape([4, 1])  # 相机的前向量
+            cam_fronts.append(cam_front.flatten()[:3])
+            cam_up = cam2ego @ np.array([0., -1., 0., 0.]).reshape([4, 1])  # 相机的上向量
+            cam_ups.append(cam_up.flatten()[:3])
 
         # occ_canvas
         voxel_show = np.logical_and(pred_occ != FREE_LABEL, camera_mask)
@@ -512,9 +512,14 @@ def main():
                            offset=[0, voxel_label.shape[0] * voxel_size[0] * 1.2 * 1, 0])
 
         out_dir = os.path.join(vis_dir, f'{scene_name}', f'{cnt:04d}_{sample_token}')
-        overall_img = draw(vis, imgs, out_dir, args.format, 
-                       cam_positions=cam_positions, focal_positions=focal_positions, cam_names=cam_names, 
-                       canva_size=canva_size, scale_factor=scale_factor, mode='pred')
+        overall_img = draw(vis, imgs, out_dir, args.format, cam_names=cam_names, 
+                           cam_positions=cam_positions, cam_fronts=cam_fronts, cam_ups=cam_ups, 
+                           canva_size=canva_size, scale_factor=scale_factor, mode='pred', offset=0)
+        if args.draw_gt:
+            offset = voxel_label.shape[0] * voxel_size[0] * 1.2 * 1
+            gt_overall_img = draw(vis, imgs, out_dir, args.format, cam_names=cam_names, 
+                                  cam_positions=cam_positions, cam_fronts=cam_fronts, cam_ups=cam_ups, 
+                                  canva_size=canva_size, scale_factor=scale_factor, mode='gt', offset = offset)
 
         vis.clear_geometries()
         

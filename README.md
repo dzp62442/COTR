@@ -62,7 +62,7 @@ CUDA_VISIBLE_DEVICES=0 python tools/train_occ.py $config
 ```shell
 CUDA_VISIBLE_DEVICES=0,1 ./tools/dist_train_occ.sh $config $num_gpu
 # For example
-CUDA_VISIBLE_DEVICES=2,3 ./tools/dist_train_occ.sh configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py 2
+CUDA_VISIBLE_DEVICES=2,3 ./tools/dist_train_occ.sh configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py 2 --auto-resume
 ```
 
 #### Test model
@@ -74,7 +74,7 @@ CUDA_VISIBLE_DEVICES=0 python tools/test_occ.py $config $checkpoint --eval mIoU
 ```shell
 CUDA_VISIBLE_DEVICES=0,1 ./tools/dist_test_occ.sh $config $checkpoint $num_gpu --eval mIoU
 # For example
-CUDA_VISIBLE_DEVICES=1 ./tools/dist_test_occ.sh configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/epoch_1_ema.pth 1 --eval mIoU
+CUDA_VISIBLE_DEVICES=1 ./tools/dist_test_occ.sh configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/epoch_10_ema.pth 1 --eval mIoU
 ```
 
 #### Train & Test model
@@ -85,7 +85,28 @@ CUDA_VISIBLE_DEVICES=1 ./tools/dist_test_occ.sh configs/cotr/cotr-surroundocc-r5
 
 #### Visualize the predicted result.
 
-##### 方案1：先生成整体的 pkl 文件，再用 mayavi 可视化（COTR 方案）
+##### 方案1：先生成每帧的 npz 文件，再用 open3d 可视化（FlashOcc 方案）（推荐）
+
+- 依赖库
+```shell
+pip install open3d==0.15.2 setuptools==59.5.0 protobuf==3.20.0 tensorboard==2.12.0
+```
+
+- 输出 npz 格式的结果文件
+```shell
+CUDA_VISIBLE_DEVICES=0 ./tools/dist_test.sh $config $checkpoint $num_gpu --eval mIoU --eval-options show_dir=$resultdir
+# For example
+CUDA_VISIBLE_DEVICES=1 ./tools/dist_test.sh configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/epoch_10_ema.pth 1 --eval mIoU --eval-options show_dir=work_dirs/cotr-surroundocc-r50-4d-stereo-24e/results/epoch_10_ema
+```
+
+- 可视化保存为图像
+```shell
+CUDA_VISIBLE_DEVICES=0 python tools/analysis_tools/vis_occ.py $resultdir --save_path $visdir --draw-gt
+# For example
+CUDA_VISIBLE_DEVICES=0 python tools/analysis_tools/vis_occ.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/results/epoch_10_ema --save_path work_dirs/cotr-surroundocc-r50-4d-stereo-24e/vis/epoch_10_ema --draw-gt
+```
+
+##### 方案2：先生成整体的 pkl 文件，再用 mayavi 可视化（COTR 方案）
 
 - 依赖库
 ```shell
@@ -98,41 +119,19 @@ pip install mayavi==4.7.3 PyQt5
 ```shell
 CUDA_VISIBLE_DEVICES=0 ./tools/dist_test.sh $config $checkpoint $num_gpu --out $pklpath
 # For example
-CUDA_VISIBLE_DEVICES=1 ./tools/dist_test.sh configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/epoch_1_ema.pth 1 --out work_dirs/cotr-surroundocc-r50-4d-stereo-24e/results/epoch_1_ema_results.pkl
+CUDA_VISIBLE_DEVICES=1 ./tools/dist_test.sh configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/epoch_10_ema.pth 1 --out work_dirs/cotr-surroundocc-r50-4d-stereo-24e/results/epoch_10_ema_results.pkl
 ```
 
 - 可视化保存为图像
 ```shell
 python tools/analysis_tools/vis_frame.py $pklpath $config --save-path $scenedir --scene-idx $sceneidx --vis-gt
 # For example
-python tools/analysis_tools/vis_frame.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/results/epoch_1_ema_results.pkl configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py --save-path work_dirs/cotr-surroundocc-r50-4d-stereo-24e/vis --scene-idx 3 --vis-gt
+python tools/analysis_tools/vis_frame.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/results/epoch_10_ema_results.pkl configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py --save-path work_dirs/cotr-surroundocc-r50-4d-stereo-24e/vis --scene-idx 3 --vis-gt
 ```
 
 - 可视化创建 gif
 ```shell
 python tools/analysis_tools/generate_gifs.py --scene-dir $scenedir
-```
-
-##### 方案2：先生成每帧的 npz 文件，再用 open3d 可视化（FlashOcc 方案）
-
-- 依赖库
-```shell
-pip install open3d==0.15.2 setuptools==59.5.0 protobuf==3.20.0 tensorboard==2.12.0
-```
-
-- 输出 npz 格式的结果文件
-```shell
-CUDA_VISIBLE_DEVICES=0 ./tools/dist_test.sh $config $checkpoint $num_gpu --eval mIoU --eval-options show_dir=$resultdir
-# For example
-CUDA_VISIBLE_DEVICES=1 ./tools/dist_test.sh configs/cotr/cotr-surroundocc-r50-4d-stereo-24e.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/epoch_3_ema.pth 1 --eval mIoU --eval-options show_dir=work_dirs/cotr-surroundocc-r50-4d-stereo-24e/results/epoch_3_ema
-```
-
-- 可视化保存为图像
-```shell
-# TODO
-CUDA_VISIBLE_DEVICES=0 python tools/analysis_tools/vis_occ.py $resultdir --save_path $visdir --draw-gt
-# For example
-CUDA_VISIBLE_DEVICES=0 python tools/analysis_tools/vis_occ.py work_dirs/cotr-surroundocc-r50-4d-stereo-24e/results/epoch_3_ema --save_path work_dirs/cotr-surroundocc-r50-4d-stereo-24e/vis/epoch_3_ema --draw-gt
 ```
 
 ## 🙏 Acknowledgement
